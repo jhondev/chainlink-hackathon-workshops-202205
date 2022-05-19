@@ -2,17 +2,21 @@
 pragma solidity ^0.8.7;
 
 import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
 
 error Raffle__SendMoreToEnterRaffle();
 error Raffle__RaffleNotOpen();
 error Raffle__UpNotNeeded();
+error Raffle__TransferFailed();
 
-contract Raffle {
+contract Raffle is VRFConsumerBaseV2 {
     enum RaffleState {
         Open,
         Calculating
     }
+
     RaffleState public s_raffleState; // storage var (expensive)
+    address public s_recentWinner;
 
     uint256 public immutable i_entranceFee;
     uint256 public immutable i_interval;
@@ -28,15 +32,16 @@ contract Raffle {
 
     event RaffleEnter(address indexed player);
     event RequestedRaffleWinner(uint256 indexed requestId);
+    event WinnerPicked(address indexed winner);
 
     constructor(
         uint256 entranceFee,
         uint256 interval,
         address vrfCoordinatorV2,
-        bytes32 gasLane, //keyhash
+        bytes32 gasLane, //keyhash: gaselane is what keyhash represent
         uint64 subscriptionId,
         uint32 callbackGasLimit
-    ) {
+    ) VRFConsumerBaseV2(vrfCoordinatorV2) {
         i_entranceFee = entranceFee;
         i_interval = interval;
         s_lastTimeStamp = block.timestamp;
@@ -86,5 +91,23 @@ contract Raffle {
             NUM_WORDS
         );
         emit RequestedRaffleWinner(requestId);
+    }
+
+    function fulfillRandomWords(
+        uint256, /* requestid*/
+        uint256[] memory randomWords
+    ) internal override {
+        uint256 indexOfWinner = randomWords[0] % s_players.length;
+        address payable recentWinner = s_players[indexOfWinner];
+        s_recentWinner = recentWinner;
+        s_players = new address payable[](0);
+        s_raffleState = RaffleState.Open;
+        s_lastTimeStamp = block.timestamp;
+        (bool success, ) = recentWinner.call{value: address(this).balance}("");
+        if (!success) {
+            revert Raffle__TransferFailed();
+        }
+
+        emit WinnerPicked(recentWinner);
     }
 }
